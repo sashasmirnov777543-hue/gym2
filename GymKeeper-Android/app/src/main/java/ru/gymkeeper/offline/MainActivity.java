@@ -52,6 +52,8 @@ public class MainActivity extends Activity {
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private Runnable restTimerRunnable;
+    private long restTimerDeadlineMs;
+    private boolean restSignalSent = true;
     private WebView webView;
     private HeartRateBle heartRateBle;
     private boolean connectHeartRateAfterPermission;
@@ -156,6 +158,11 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public void completeRestTimer() {
+            runOnUiThread(() -> finishNativeRestTimer(false));
+        }
+
+        @JavascriptInterface
         public void connectHeartRate() {
             runOnUiThread(() -> {
                 if (heartRateBle.hasPermissions()) {
@@ -202,19 +209,41 @@ public class MainActivity extends Activity {
 
     private void scheduleNativeRestTimer(int seconds) {
         cancelNativeRestTimer();
-        restTimerRunnable = this::sendTripleRestSignal;
-        mainHandler.postDelayed(restTimerRunnable, Math.max(1, seconds) * 1000L);
+        long delayMs = Math.max(1, seconds) * 1000L;
+        restTimerDeadlineMs = SystemClock.elapsedRealtime() + delayMs;
+        restSignalSent = false;
+        restTimerRunnable = () -> finishNativeRestTimer(true);
+        mainHandler.postDelayed(restTimerRunnable, delayMs);
     }
 
     private void cancelNativeRestTimer() {
-        if (restTimerRunnable != null) {
-            mainHandler.removeCallbacks(restTimerRunnable);
-            restTimerRunnable = null;
+        if (restTimerRunnable != null) mainHandler.removeCallbacks(restTimerRunnable);
+        restTimerRunnable = null;
+        restTimerDeadlineMs = 0L;
+        restSignalSent = true;
+    }
+
+    /**
+     * Двойная страховка: этот метод вызывается и нативным Handler, и экранным
+     * таймером WebView. Флаг гарантирует ровно один тройной сигнал.
+     */
+    private void finishNativeRestTimer(boolean fromNativeHandler) {
+        if (restSignalSent || restTimerDeadlineMs == 0L) return;
+        long remaining = restTimerDeadlineMs - SystemClock.elapsedRealtime();
+        if (!fromNativeHandler && remaining > 750L) return;
+        if (remaining > 0L) {
+            if (restTimerRunnable != null) mainHandler.removeCallbacks(restTimerRunnable);
+            restTimerRunnable = () -> finishNativeRestTimer(true);
+            mainHandler.postDelayed(restTimerRunnable, remaining);
+            return;
         }
+        restSignalSent = true;
+        restTimerRunnable = null;
+        restTimerDeadlineMs = 0L;
+        sendTripleRestSignal();
     }
 
     private void sendTripleRestSignal() {
-        restTimerRunnable = null;
         // Три отдельных уведомления надёжнее передаются Huawei Health на часы,
         // чем один телефонный vibrationPattern.
         for (int index = 0; index < 3; index++) {
