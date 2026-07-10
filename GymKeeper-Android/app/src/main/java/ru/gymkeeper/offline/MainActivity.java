@@ -2,6 +2,7 @@ package ru.gymkeeper.offline;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlarmManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -53,6 +54,7 @@ public class MainActivity extends Activity {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private Runnable restTimerRunnable;
     private long restTimerDeadlineMs;
+    private long restTimerToken;
     private boolean restSignalSent = true;
     private WebView webView;
     private HeartRateBle heartRateBle;
@@ -105,6 +107,7 @@ public class MainActivity extends Activity {
     }
 
     private void configureRestNotifications() {
+        RestTimerReceiver.ensureChannel(this);
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         NotificationChannel channel = new NotificationChannel(
                 REST_CHANNEL_ID,
@@ -211,16 +214,45 @@ public class MainActivity extends Activity {
         cancelNativeRestTimer();
         long delayMs = Math.max(1, seconds) * 1000L;
         restTimerDeadlineMs = SystemClock.elapsedRealtime() + delayMs;
+        restTimerToken = System.currentTimeMillis();
         restSignalSent = false;
+        RestTimerReceiver.arm(this, restTimerToken);
+        scheduleExactRestAlarm(delayMs, restTimerToken);
         restTimerRunnable = () -> finishNativeRestTimer(true);
         mainHandler.postDelayed(restTimerRunnable, delayMs);
     }
 
     private void cancelNativeRestTimer() {
         if (restTimerRunnable != null) mainHandler.removeCallbacks(restTimerRunnable);
+        cancelExactRestAlarm();
+        RestTimerReceiver.cancel(this, restTimerToken);
         restTimerRunnable = null;
         restTimerDeadlineMs = 0L;
+        restTimerToken = 0L;
         restSignalSent = true;
+    }
+
+    private PendingIntent restAlarmIntent(long token) {
+        Intent intent = new Intent(this, RestTimerReceiver.class)
+                .setAction(RestTimerReceiver.ACTION_REST_FINISHED)
+                .putExtra(RestTimerReceiver.EXTRA_TOKEN, token);
+        return PendingIntent.getBroadcast(this, 8300, intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+    }
+
+    private void scheduleExactRestAlarm(long delayMs, long token) {
+        AlarmManager alarm = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
+        if (alarm == null) return;
+        long triggerAt = System.currentTimeMillis() + delayMs;
+        try {
+            alarm.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, restAlarmIntent(token));
+        } catch (SecurityException denied) {
+            alarm.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, restAlarmIntent(token));
+        }
+    }
+
+    private void cancelExactRestAlarm() {
+        AlarmManager alarm = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
+        if (alarm != null) alarm.cancel(restAlarmIntent(restTimerToken));
     }
 
     /**
@@ -237,9 +269,18 @@ public class MainActivity extends Activity {
             mainHandler.postDelayed(restTimerRunnable, remaining);
             return;
         }
+        if (!RestTimerReceiver.claim(this, restTimerToken)) {
+            restSignalSent = true;
+            restTimerRunnable = null;
+            restTimerDeadlineMs = 0L;
+            restTimerToken = 0L;
+            return;
+        }
+        cancelExactRestAlarm();
         restSignalSent = true;
         restTimerRunnable = null;
         restTimerDeadlineMs = 0L;
+        restTimerToken = 0L;
         sendTripleRestSignal();
     }
 

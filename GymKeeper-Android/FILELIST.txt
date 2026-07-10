@@ -22,6 +22,7 @@ app/src/main/assets/styles.css
 app/src/main/assets/training-v2.js
 app/src/main/java/ru/gymkeeper/offline/HeartRateBle.java
 app/src/main/java/ru/gymkeeper/offline/MainActivity.java
+app/src/main/java/ru/gymkeeper/offline/RestTimerReceiver.java
 app/src/main/res/drawable/app_icon.png
 app/src/main/res/drawable/ic_timer.xml
 app/src/main/res/values/strings.xml
