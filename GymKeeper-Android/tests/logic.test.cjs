@@ -1,0 +1,10 @@
+const test=require('node:test');const assert=require('node:assert/strict');const L=require('../app/src/main/assets/logic.js');
+test('93.5 x 10 -> e1RM 124.7 -> TM 112.5',()=>{const x=L.trainingMax(93.5,10);assert.equal(x.e1rm.toFixed(1),'124.7');assert.equal(x.tm,112.5)});
+test('rounding to 2.5',()=>{assert.equal(L.roundToStep(111.3),112.5);assert.equal(L.roundToStep(111.2),110)});
+test('board press uses e1RM',()=>{assert.match(L.recalcText('Board press','105 % e1RM (130)',112.5,125),/132,5/)});
+test('fingerprint is stable and changes with reps',()=>{assert.equal(L.amrapFingerprint(7,93.5,10),L.amrapFingerprint(7,93.5,10));assert.notEqual(L.amrapFingerprint(7,93.5,10),L.amrapFingerprint(7,93.5,9))});
+test('readiness red on severe pain',()=>assert.equal(L.readiness({sleepMinutes:480,sleepQuality:5,morningPulseDelta:0,shoulderPain:7,backPain:0,energy:5}),'red'));
+test('cycle 4 and 8 mini taper',()=>{assert.equal(L.isMiniTaper('v9',4,'green'),true);assert.equal(L.isMiniTaper('v9',5,'green'),false)});
+test('myoreps rules',()=>{assert.equal(L.isMyoEligible('Молотковые сгибания'),true);assert.equal(L.isMyoEligible('Трицепс разгибания'),false);assert.match(L.myoStop({pain:false,techniqueOk:true,reps:2,miniSets:1}),/меньше 3/)});
+test('offline dedup',()=>assert.equal(L.dedupeOps([{operationId:'a'},{operationId:'a'},{operationId:'b'}]).length,2));
+test('double progression',()=>assert.equal(L.doubleProgression([{weight:10,reps:12,rir:2},{weight:10,reps:12,rir:1}],'8–12').weight,12.5));

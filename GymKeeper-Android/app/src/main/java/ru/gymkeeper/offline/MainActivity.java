@@ -6,6 +6,7 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.app.KeyguardManager;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
@@ -17,6 +18,7 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.provider.MediaStore;
@@ -44,6 +46,7 @@ public class MainActivity extends Activity {
     private static final int IMPORT_BACKUP_REQUEST = 4107;
     private static final int NOTIFICATION_PERMISSION_REQUEST = 4108;
     private static final int BLUETOOTH_PERMISSION_REQUEST = 4109;
+    private static final int DEVICE_AUTH_REQUEST = 4110;
     private static final String REST_CHANNEL_ID = "gymkeeper_rest_v2";
     private static final int REST_NOTIFICATION_BASE_ID = 7300;
 
@@ -52,6 +55,8 @@ public class MainActivity extends Activity {
     private WebView webView;
     private HeartRateBle heartRateBle;
     private boolean connectHeartRateAfterPermission;
+    private boolean authenticationInProgress;
+    private long lastAuthenticatedAt;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -167,6 +172,20 @@ public class MainActivity extends Activity {
             runOnUiThread(() -> {
                 heartRateBle.stop();
                 emitHeartRateToJs("idle", null, null, null);
+            });
+        }
+
+        @JavascriptInterface
+        public boolean isAppLockEnabled() {
+            return getPreferences(MODE_PRIVATE).getBoolean("app_lock_enabled", true);
+        }
+
+        @JavascriptInterface
+        public void setAppLockEnabled(boolean enabled) {
+            getPreferences(MODE_PRIVATE).edit().putBoolean("app_lock_enabled", enabled).apply();
+            if (enabled) runOnUiThread(() -> {
+                lastAuthenticatedAt = 0L;
+                requestDeviceAuthentication();
             });
         }
 
@@ -293,6 +312,12 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == DEVICE_AUTH_REQUEST) {
+            authenticationInProgress = false;
+            if (resultCode == RESULT_OK) lastAuthenticatedAt = SystemClock.elapsedRealtime();
+            else finish();
+            return;
+        }
         if (requestCode != IMPORT_BACKUP_REQUEST || resultCode != RESULT_OK || data == null || data.getData() == null) return;
         try {
             Uri uri = data.getData();
@@ -321,6 +346,26 @@ public class MainActivity extends Activity {
             if (heartRateBle.hasPermissions()) heartRateBle.start();
             else emitHeartRateToJs("error", null, null, "Без разрешения Bluetooth пульс недоступен");
         }
+    }
+
+    private void requestDeviceAuthentication() {
+        if (!getPreferences(MODE_PRIVATE).getBoolean("app_lock_enabled", true)) return;
+        if (authenticationInProgress || (lastAuthenticatedAt > 0L && SystemClock.elapsedRealtime() - lastAuthenticatedAt < 300000L)) return;
+        KeyguardManager keyguard = (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
+        Intent intent = keyguard == null ? null : keyguard.createConfirmDeviceCredentialIntent(
+                "GymKeeper",
+                "Подтвердите личность для доступа к тренировочным данным"
+        );
+        if (intent != null) {
+            authenticationInProgress = true;
+            startActivityForResult(intent, DEVICE_AUTH_REQUEST);
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        mainHandler.postDelayed(this::requestDeviceAuthentication, 600L);
     }
 
     @Override
