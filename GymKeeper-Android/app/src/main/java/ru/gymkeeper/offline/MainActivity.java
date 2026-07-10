@@ -1,17 +1,26 @@
 package ru.gymkeeper.offline;
 
+import android.Manifest;
 import android.app.Activity;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.content.ContentValues;
+import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
 import android.provider.MediaStore;
-import android.view.View;
 import android.webkit.JavascriptInterface;
-import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -29,15 +38,28 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 
+import org.json.JSONObject;
+
 public class MainActivity extends Activity {
     private static final int IMPORT_BACKUP_REQUEST = 4107;
+    private static final int NOTIFICATION_PERMISSION_REQUEST = 4108;
+    private static final int BLUETOOTH_PERMISSION_REQUEST = 4109;
+    private static final String REST_CHANNEL_ID = "gymkeeper_rest_v2";
+    private static final int REST_NOTIFICATION_BASE_ID = 7300;
+
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private Runnable restTimerRunnable;
     private WebView webView;
+    private HeartRateBle heartRateBle;
+    private boolean connectHeartRateAfterPermission;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getWindow().setStatusBarColor(Color.rgb(17, 24, 39));
         getWindow().setNavigationBarColor(Color.rgb(11, 18, 32));
+        configureRestNotifications();
+        heartRateBle = new HeartRateBle(this, this::emitHeartRateToJs);
 
         webView = new WebView(this);
         webView.setBackgroundColor(Color.rgb(248, 250, 252));
@@ -51,10 +73,8 @@ public class MainActivity extends Activity {
         settings.setAllowContentAccess(false);
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
-            settings.setAllowFileAccessFromFileURLs(true);
-            settings.setAllowUniversalAccessFromFileURLs(false);
-        }
+        settings.setAllowFileAccessFromFileURLs(true);
+        settings.setAllowUniversalAccessFromFileURLs(false);
 
         webView.addJavascriptInterface(new AndroidBridge(), "Android");
         webView.setWebChromeClient(new WebChromeClient());
@@ -75,6 +95,28 @@ public class MainActivity extends Activity {
             }
         });
         webView.loadUrl("file:///android_asset/index.html");
+    }
+
+    private void configureRestNotifications() {
+        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        NotificationChannel channel = new NotificationChannel(
+                REST_CHANNEL_ID,
+                "Окончание отдыха",
+                NotificationManager.IMPORTANCE_HIGH
+        );
+        channel.setDescription("Три сигнала после завершения таймера отдыха");
+        channel.enableVibration(true);
+        channel.setVibrationPattern(new long[]{0, 250});
+        channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+        manager.createNotificationChannel(channel);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(
+                    new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                    NOTIFICATION_PERMISSION_REQUEST
+            );
+        }
     }
 
     public final class AndroidBridge {
@@ -99,6 +141,36 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public void scheduleRestTimer(int seconds) {
+            runOnUiThread(() -> scheduleNativeRestTimer(seconds));
+        }
+
+        @JavascriptInterface
+        public void cancelRestTimer() {
+            runOnUiThread(MainActivity.this::cancelNativeRestTimer);
+        }
+
+        @JavascriptInterface
+        public void connectHeartRate() {
+            runOnUiThread(() -> {
+                if (heartRateBle.hasPermissions()) {
+                    heartRateBle.start();
+                } else {
+                    connectHeartRateAfterPermission = true;
+                    requestPermissions(heartRateBle.requiredPermissions(), BLUETOOTH_PERMISSION_REQUEST);
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void disconnectHeartRate() {
+            runOnUiThread(() -> {
+                heartRateBle.stop();
+                emitHeartRateToJs("idle", null, null, null);
+            });
+        }
+
+        @JavascriptInterface
         public void closeApp() {
             runOnUiThread(MainActivity.this::finish);
         }
@@ -107,6 +179,86 @@ public class MainActivity extends Activity {
         public void toast(String text) {
             runOnUiThread(() -> Toast.makeText(MainActivity.this, text, Toast.LENGTH_SHORT).show());
         }
+    }
+
+    private void scheduleNativeRestTimer(int seconds) {
+        cancelNativeRestTimer();
+        restTimerRunnable = this::sendTripleRestSignal;
+        mainHandler.postDelayed(restTimerRunnable, Math.max(1, seconds) * 1000L);
+    }
+
+    private void cancelNativeRestTimer() {
+        if (restTimerRunnable != null) {
+            mainHandler.removeCallbacks(restTimerRunnable);
+            restTimerRunnable = null;
+        }
+    }
+
+    private void sendTripleRestSignal() {
+        restTimerRunnable = null;
+        // Три отдельных уведомления надёжнее передаются Huawei Health на часы,
+        // чем один телефонный vibrationPattern.
+        for (int index = 0; index < 3; index++) {
+            final int signal = index;
+            mainHandler.postDelayed(() -> postRestNotification(signal), index * 800L);
+        }
+    }
+
+    private void postRestNotification(int signal) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            if (signal == 0) vibratePhoneTriple();
+            return;
+        }
+
+        Intent openIntent = new Intent(this, MainActivity.class);
+        openIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent pendingIntent = PendingIntent.getActivity(
+                this,
+                0,
+                openIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+
+        Notification notification = new Notification.Builder(this, REST_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_timer)
+                .setContentTitle("Отдых завершён")
+                .setContentText("Можно начинать следующий подход")
+                .setContentIntent(pendingIntent)
+                .setAutoCancel(true)
+                .setCategory(Notification.CATEGORY_ALARM)
+                .setVisibility(Notification.VISIBILITY_PUBLIC)
+                .setOnlyAlertOnce(false)
+                .build();
+
+        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        manager.notify(REST_NOTIFICATION_BASE_ID + signal, notification);
+        if (signal == 2) {
+            mainHandler.postDelayed(() -> {
+                manager.cancel(REST_NOTIFICATION_BASE_ID);
+                manager.cancel(REST_NOTIFICATION_BASE_ID + 1);
+            }, 5000L);
+        }
+    }
+
+    private void vibratePhoneTriple() {
+        Vibrator vibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+        if (vibrator != null && vibrator.hasVibrator()) {
+            vibrator.vibrate(VibrationEffect.createWaveform(
+                    new long[]{0, 250, 350, 250, 350, 250},
+                    -1
+            ));
+        }
+    }
+
+    private void emitHeartRateToJs(String status, Integer bpm, String deviceName, String error) {
+        if (webView == null) return;
+        String script = "window.GymKeeper && window.GymKeeper.onHeartRate("
+                + JSONObject.quote(status) + ","
+                + (bpm == null ? "null" : bpm) + ","
+                + (deviceName == null ? "null" : JSONObject.quote(deviceName)) + ","
+                + (error == null ? "null" : JSONObject.quote(error)) + ")";
+        runOnUiThread(() -> webView.evaluateJavascript(script, null));
     }
 
     private void saveBackup(String json, String requestedName) {
@@ -151,10 +303,23 @@ public class MainActivity extends Activity {
                 String line;
                 while ((line = reader.readLine()) != null) text.append(line).append('\n');
             }
-            String encoded = android.util.Base64.encodeToString(text.toString().getBytes(StandardCharsets.UTF_8), android.util.Base64.NO_WRAP);
+            String encoded = android.util.Base64.encodeToString(
+                    text.toString().getBytes(StandardCharsets.UTF_8),
+                    android.util.Base64.NO_WRAP
+            );
             webView.evaluateJavascript("window.GymKeeper.receiveImportBase64('" + encoded + "')", null);
         } catch (Exception error) {
             Toast.makeText(this, "Ошибка чтения: " + error.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == BLUETOOTH_PERMISSION_REQUEST && connectHeartRateAfterPermission) {
+            connectHeartRateAfterPermission = false;
+            if (heartRateBle.hasPermissions()) heartRateBle.start();
+            else emitHeartRateToJs("error", null, null, "Без разрешения Bluetooth пульс недоступен");
         }
     }
 
@@ -166,6 +331,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (heartRateBle != null) heartRateBle.stop();
         if (webView != null) {
             webView.setKeepScreenOn(false);
             webView.destroy();

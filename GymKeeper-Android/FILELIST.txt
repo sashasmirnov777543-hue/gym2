@@ -3,6 +3,7 @@
 FILELIST.txt
 README-RU.md
 app/build.gradle.kts
+app/gymkeeper-offline.jks
 app/src/main/AndroidManifest.xml
 app/src/main/assets/app.js
 app/src/main/assets/guides.js
@@ -11,12 +12,16 @@ app/src/main/assets/index.html
 app/src/main/assets/seed-backup.json
 app/src/main/assets/seed.js
 app/src/main/assets/styles.css
+app/src/main/java/ru/gymkeeper/offline/HeartRateBle.java
 app/src/main/java/ru/gymkeeper/offline/MainActivity.java
 app/src/main/res/drawable/app_icon.png
+app/src/main/res/drawable/ic_timer.xml
 app/src/main/res/values/strings.xml
 app/src/main/res/values/themes.xml
 build.gradle.kts
 gradle.properties
 preview.png
 settings.gradle.kts
+watch-preview.png
+ОБНОВЛЕНИЕ-1.1-HUAWEI-WATCH.txt
 ПРОЧТИ-МЕНЯ.txt
