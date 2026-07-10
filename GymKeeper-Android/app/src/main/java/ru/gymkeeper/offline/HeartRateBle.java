@@ -109,12 +109,16 @@ final class HeartRateBle {
 
     private final Runnable scanTimeout = () -> {
         if (!scanning) return;
-        if (scanner != null && hasPermissions()) {
-            try { scanner.stopScan(scanCallback); } catch (Exception ignored) {}
-        }
+        stopScanSafely();
         scanning = false;
         emit("error", null, null, "Часы не найдены. Включите на них «Трансляцию пульса»");
     };
+
+    private void stopScanSafely() {
+        if (scanner != null && hasPermissions()) {
+            try { scanner.stopScan(scanCallback); } catch (Exception ignored) {}
+        }
+    }
 
     private final ScanCallback scanCallback = new ScanCallback() {
         @Override

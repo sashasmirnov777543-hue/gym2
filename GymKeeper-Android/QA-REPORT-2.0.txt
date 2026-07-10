@@ -20,3 +20,5 @@ GYMKEEPER OFFLINE 2.0 — QA
 - тестовый вызов тройного уведомления.
 
 Окончательная компиляция Java/Android выполняется GitHub Actions. Порядок CI: синтаксис → модульные тесты → Gradle APK.
+
+Build fix 2.0.1: устранён Java illegal forward reference в HeartRateBle.scanTimeout.
