@@ -27,3 +27,34 @@ const baseHistoryDetail=window.historyDetail;window.historyDetail=id=>{const s=r
 renderSettings=function(){const hist=[...rows('tm_change_history')].sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)).slice(0,12),lock=(()=>{try{return Android.isAppLockEnabled()}catch{return false}})();let body=`<section class="card"><h2>Защита приложения</h2><label class="row between"><span><b>Системный вход</b><br><span class="small muted">PIN/отпечаток экрана блокировки</span></span><input type="checkbox" ${lock?'checked':''} onchange="setAppLock(this.checked)"></label></section><section class="card"><h2>Тренировочный максимум</h2>${[1,2,3].map(m=>`<label><span class="label">TM макроцикла ${m}, кг</span><div class="row"><input id="tm-${m}" class="input" type="number" step="2.5" value="${esc(setting('tm_macro'+m,''))}"><button class="btn" onclick="manualTM(${m})">Сохранить</button></div></label>`).join('')}<div class="form-grid" style="margin-top:12px"><button class="btn ghost" onclick="recalculateLastAmrap()">Пересчитать старый AMRAP</button><button class="btn secondary" onclick="undoLatestTM()">Отменить последнее</button></div></section><section class="card"><h2>История TM</h2>${hist.length?hist.map(x=>`<div class="exercise small"><div class="row between"><b>Макро ${x.target_macro}: ${x.old_tm??'—'} → ${x.new_tm} кг</b><span>${fmtDate(x.created_at)}</span></div><span class="muted">${x.source}${x.amrap_weight?` · AMRAP ${x.amrap_weight}×${x.amrap_reps} · e1RM ${(+x.e1rm).toFixed(1)}`:''}</span></div>`).join(''):'<p class="muted small">Изменений пока нет</p>'}</section><section class="card"><h2>Текущий прогресс</h2><div class="form-grid"><label><span class="label">Цикл V9</span><input id="cy-v9" class="input" type="number" value="${esc(setting('current_cycle','1'))}"></label><label><span class="label">Цикл H2</span><input id="cy-h2" class="input" type="number" value="${esc(setting('current_cycle_h2','1'))}"></label></div><button class="btn full" style="margin-top:10px" onclick="saveCycles()">Сохранить циклы</button></section><section class="card"><h2>Резервная копия</h2><p class="small muted">Перед восстановлением файл проходит проверку связей и активных сессий.</p><button class="btn full" onclick="exportBackup()">Скачать JSON-копию</button><button class="btn ghost full" style="margin-top:9px" onclick="chooseImport()">Проверить и восстановить JSON</button></section><section class="card"><h2>Huawei Watch GT 5 Pro</h2><p class="small muted">Три уведомления после отдыха; BLE-пульс подключается в кардио.</p><button class="btn full" onclick="testWatchSignal()">Проверить тройную вибрацию</button></section><section class="card"><h2>Версия</h2><p><b>GymKeeper Offline 2.0.3</b></p><p class="small muted">Полный автономный функциональный эквивалент · схема данных v2 · без INTERNET.</p></section>`;shell(body,'Настройки','TM, безопасность и резервные копии')};
 window.setAppLock=enabled=>{try{Android.setAppLockEnabled(enabled);toast(enabled?'Системный вход включён':'Системный вход отключён')}catch{toast('Доступно в Android APK')}};
 })();
+/* Программные обновления 07.2026: скоростной жим + кардио Z2-only (одноразовая миграция) */
+(function(){
+try{
+ if(setting('program_update_2026_07','0')==='1')return;
+ const SPEED_NAME='Жим лёжа — скоростной';
+ const fmtW=v=>(Number.isInteger(v)?String(v):v.toFixed(1)).replace('.',',');
+ gkTx(t=>{
+  for(const c of t.cycles.filter(c=>c.block==='v9')){
+   const strength=t.workouts.filter(w=>+w.cycle_id===+c.id&&w.kind!=='cardio').sort((a,b)=>+a.sort_order-+b.sort_order);
+   const target=strength[1];
+   if(target){
+    const exs=t.workout_exercises.filter(e=>+e.workout_id===+target.id);
+    if(!exs.some(e=>e.name===SPEED_NAME)){
+     const tm=+(setting('tm_macro'+c.macrocycle,null)||[110,113,116][(+c.macrocycle||1)-1]);
+     const minSort=exs.length?Math.min(...exs.map(e=>+e.sort_order||0)):1;
+     t.workout_exercises.push({id:nextId('workout_exercises'),workout_id:+target.id,sort_order:minSort-1,name:SPEED_NAME,weight_text:'65 % ТМ ('+fmtW(GKLogic.roundToStep(tm*0.65))+')',pct_of_tm:null,target_reps:'3',target_sets:'5',target_rir_min:3,target_rir_max:4,tempo:'X-1-1',comment:'Скоростной жим 5×3 @65 % ТМ: каждое повторение максимально быстро вверх. Первым упражнением, на свежих мышцах. Медленный подход = стоп.',rest_seconds:120});
+    }
+   }
+   const cardio=t.workouts.filter(w=>+w.cycle_id===+c.id&&w.kind==='cardio').sort((a,b)=>+a.sort_order-+b.sort_order);
+   cardio.forEach((w,i)=>{
+    const n=+c.number,b1=i===0;
+    w.title=b1?'Кардио B1 — длинная Z2 (растяжка сердца)':'Кардио B3 — Z2 восстановление';
+    w.cardio_zone=n>=11?'Z1':n===10?'Z1–Z2':'Z2';
+    w.cardio_minutes=b1?(n<=2?'40–50':n<=4?'60–70':n<=7?'50–60':n===8?'40–50':n===9?'30':n===10?'15–20':n<=12?'15':'—'):(n<=8?'25–30':n===9?'20–25':n===10?'15–20':'—');
+    w.notes=n===13?'Неделя теста 1ПМ: полный отдых или прогулка 30 мин по желанию.':n>=11?'Пик/тейпер: только лёгкая Z1 или прогулка — свежесть ЦНС важнее.':b1?'Только Z2 — разговорный темп (говорить полными предложениями можно, петь нет). Велосипед/эллипс, без интервалов. Перед тяжёлым днём А — потолок 60 мин. Плохой сон или пульс покоя +5 → срезать до 30 мин. Первые 5 мин — разгон из Z1, последние 5 мин — заминка в Z1. Вставать медленно — ортостатика.':'Z2 восстановительная, разговорный темп. Первые/последние 3 мин — разгон и заминка. Можно заменить прогулкой.';
+   });
+  }
+  gkSetSetting(t,'program_update_2026_07','1');
+ });
+}catch(e){}
+})();
