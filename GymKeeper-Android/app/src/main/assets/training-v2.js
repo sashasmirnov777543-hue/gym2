@@ -58,3 +58,33 @@ try{
  });
 }catch(e){}
 })();
+/* Утренний мониторинг восстановления: BLE-замер пульса покоя (Huawei GT 5 Pro) */
+(function(){
+const KEY='morning_hr_log',DURATION=60;
+const todayStr=()=>new Date(Date.now()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,10);
+const log=()=>{try{return JSON.parse(setting(KEY,'[]'))||[]}catch(e){return[]}};
+const saveLog=a=>gkTx(t=>gkSetSetting(t,KEY,JSON.stringify(a.slice(-90))));
+const median=v=>{if(!v.length)return null;const s=[...v].sort((a,b)=>a-b),m=Math.floor(s.length/2);return s.length%2?s[m]:Math.round((s[m-1]+s[m])/2)};
+const baseline=excludeToday=>{const d=todayStr(),v=log().filter(x=>!excludeToday||x.date!==d).slice(-7).map(x=>+x.bpm);return v.length<3?null:median(v)};
+const todayEntry=()=>log().find(x=>x.date===todayStr());
+window.gkMorningDelta=()=>{const t=todayEntry();if(!t)return null;const b=baseline(true);return b==null?null:Math.round(t.bpm-b)};
+const verdict=d=>d==null?['#64748b','Мало данных для базы — копите замеры минимум 3 дня.']:d<=2?['#16a34a','Восстановление в норме. Работайте по плану.']:d<=4?['#ca8a04','Лёгкое недовосстановление: контролируйте RIR, не форсируйте вес.']:d<=9?['#ea580c','Пульс покоя +'+d+': срежьте кардио до 30 мин, изоляцию — по самочувствию.']:['#dc2626','Пульс покоя +'+d+': день отдыха или прогулка. Тяжёлую работу перенесите.'];
+let buf=[],measuring=false,startedAt=0,timer=null;
+function ui(html){const b=document.getElementById('gk-morning-body');if(b)b.innerHTML=html}
+function stopMeasure(){measuring=false;clearInterval(timer);try{Android.disconnectHeartRate()}catch(e){}}
+function renderIdle(msg){const a=log().slice(-7),b=baseline(false);ui(`<div style="font-size:14px;color:#475569">${msg||'Лягте спокойно, включите на часах «Трансляцию пульса» и нажмите кнопку.'}</div><button onclick="gkMorningStart()" style="margin-top:10px;width:100%;padding:12px;border:0;border-radius:10px;background:#0f172a;color:#fff;font-size:15px">Начать замер (${DURATION} с)</button><div style="margin-top:12px;font-size:13px;color:#334155">${a.length?('База (медиана 7 дн): <b>'+(b??'—')+'</b> уд/мин<br>'+a.map(x=>x.date.slice(5)+' — <b>'+x.bpm+'</b>').join('<br>')):'Замеров пока нет.'}</div>`)}
+function renderResult(bpm){const b=baseline(true),d=b==null?null:Math.round(bpm-b),v=verdict(d);ui(`<div style="font-size:15px">Сегодня: <b style="font-size:22px">${bpm}</b> уд/мин${b!=null?' · база '+b+' · дельта <b style="color:'+v[0]+'">'+(d>0?'+':'')+d+'</b>':''}</div><div style="margin-top:8px;padding:10px;border-radius:10px;background:${v[0]}1a;color:${v[0]};font-size:14px">${v[1]}</div><div style="margin-top:8px;font-size:13px;color:#475569">Дельта подставится автоматически в опрос готовности перед тренировкой.</div><button onclick="gkMorningStart()" style="margin-top:10px;width:100%;padding:10px;border:0;border-radius:10px;background:#f1f5f9;color:#0f172a">Перемерить</button>`)}
+function finishMeasure(){stopMeasure();const bpm=median(buf);if(buf.length<15||bpm==null){renderIdle('Слишком мало данных ('+buf.length+' значений). Проверьте трансляцию пульса и повторите.');return}const a=log().filter(x=>x.date!==todayStr());a.push({date:todayStr(),bpm,at:now()});saveLog(a);renderResult(bpm)}
+window.gkMorningStart=()=>{buf=[];startedAt=0;measuring=true;ui('Подключаюсь к часам…');try{Android.connectHeartRate()}catch(e){measuring=false;ui('Замер доступен только в Android-приложении');return}clearInterval(timer);timer=setInterval(()=>{if(!measuring)return;if(!startedAt){return}const left=DURATION-Math.floor((Date.now()-startedAt)/1000);if(left<=0)finishMeasure();else ui('Идёт замер… осталось '+left+' с · получено '+buf.length+' значений<br><span style="font-size:26px;font-weight:700">'+(buf[buf.length-1]??'—')+'</span> уд/мин')},500)};
+window.gkMorningClose=()=>{if(measuring)stopMeasure();closeModal()};
+window.gkOpenMorning=()=>{showModal('<div style="padding:4px 2px"><div style="font-size:17px;font-weight:600;margin-bottom:8px">♥ Утренний пульс покоя</div><div id="gk-morning-body"></div><button onclick="gkMorningClose()" style="margin-top:12px;width:100%;padding:10px;border:0;border-radius:10px;background:#e2e8f0;color:#0f172a">Закрыть</button></div>');const t=todayEntry();t?renderResult(t.bpm):renderIdle()};
+const oldHr=window.GymKeeper&&window.GymKeeper.onHeartRate;
+if(window.GymKeeper)window.GymKeeper.onHeartRate=function(status,bpm,name,error){if(oldHr)try{oldHr(status,bpm,name,error)}catch(e){}
+ if(!measuring)return;
+ if(status==='error'&&error){stopMeasure();renderIdle('Ошибка: '+error);return}
+ if(bpm){if(!startedAt)startedAt=Date.now();buf.push(+bpm)}};
+const oldShowModal=window.showModal;
+window.showModal=function(html){oldShowModal(html);try{const el=document.getElementById('r-pulse'),d=window.gkMorningDelta();if(el&&d!=null&&(el.value===''||el.value==='0'))el.value=Math.max(0,d)}catch(e){}};
+function ensureBtn(){if(document.getElementById('gk-morning-btn'))return;const b=document.createElement('button');b.id='gk-morning-btn';b.textContent='♥ Утро';b.setAttribute('style','position:fixed;right:12px;bottom:84px;z-index:60;padding:10px 14px;border:0;border-radius:999px;background:#0f172a;color:#fff;font-size:14px;box-shadow:0 4px 12px rgba(15,23,42,.35)');b.onclick=()=>window.gkOpenMorning();document.body.appendChild(b)}
+if(document.body)ensureBtn();else document.addEventListener('DOMContentLoaded',ensureBtn);
+})();
