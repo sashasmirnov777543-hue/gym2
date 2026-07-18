@@ -2,7 +2,8 @@
   const STEP=2.5,TM_FACTOR=.9;
   const roundToStep=(v,step=STEP)=>{if(!Number.isFinite(v)||!Number.isFinite(step)||step<=0)throw Error('Некорректное значение');return Math.round(v/step)*step};
   const epley1RM=(w,r)=>{w=+w;r=+r;if(!(w>0)||!Number.isInteger(r)||r<1)throw Error('Некорректный AMRAP');return r===1?w:w*(1+r/30)};
-  const trainingMax=(w,r)=>{const e1rm=epley1RM(w,r);return{e1rm,tm:roundToStep(e1rm*TM_FACTOR)}};
+  const AMRAP_REPS_CAP=10;
+const trainingMax=(w,r)=>{const capped=Math.min(+r,AMRAP_REPS_CAP);const e1rm=epley1RM(w,capped);return{e1rm,tm:roundToStep(e1rm*TM_FACTOR),cappedReps:capped,rawReps:+r}};
   const readiness=i=>{let s=0;s+=i.sleepMinutes<300?3:i.sleepMinutes<360?2:i.sleepMinutes<420?1:0;s+=i.sleepQuality<=1?3:i.sleepQuality===2?2:i.sleepQuality===3?1:0;s+=i.morningPulseDelta>=15?3:i.morningPulseDelta>=10?2:i.morningPulseDelta>=5?1:0;const p=Math.max(i.shoulderPain,i.backPain);s+=p>=7?4:p>=4?2:p>=2?1:0;s+=i.energy<=1?3:i.energy===2?2:i.energy===3?1:0;return p>=7||s>=10?'red':s>=7?'orange':s>=3?'yellow':'green'};
   const isMiniTaper=(block,cycle,level)=>level==='orange'||level==='red'||(block==='v9'&&[4,8].includes(+cycle));
   const isBoardPress=n=>/board\s*press|жим\s+(?:с|от)\s+бруск/i.test(n||'');
